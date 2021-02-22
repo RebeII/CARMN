@@ -62,24 +62,21 @@ class mul_dataloader(data.Dataset):
     def __getitem__(self, i):
         index = i
 
-        text_file = open(self.dir, 'rb')
+        text_file = open(self.dir + str(index) + ".pickle", 'rb')
         file = pickle.load(text_file)
         text_file.close()
-        text = file["text_tensor"][i]
-        text = text.type(torch.FloatTensor)
+        text = file["text_tensor"]
         #text = text.float()
 
-        img = file["image"][i]
-        label = file["label"][i]
+        img = file["image"]
+        label = file["label"]
 
         return text, img, label
     
 
     def __len__(self):
-        text_file = open(self.dir, 'rb')
-        file = pickle.load(text_file)
-        text_file.close()
-        return len(file["label"])
+        files = os.listdir(self.dir) 
+        return len(files)
 
 
 class CARMN(nn.Module):
@@ -240,23 +237,27 @@ if __name__ == '__main__':
     train_dataset = mul_dataloader(train_dir)
     valiate_dataset = mul_dataloader(valiate_dir)
     test_dataset = mul_dataloader(test_dir)
-    train_loader = data.DataLoader(dataset=train_dataset, batch_size=BATCHSIZE, shuffle=False)
+    train_loader = data.DataLoader(dataset=train_dataset, batch_size=BATCHSIZE, shuffle=True)
     valiate_loader = data.DataLoader(dataset=valiate_dataset, batch_size=BATCHSIZE, shuffle=False)
     test_loader = data.DataLoader(dataset=test_dataset, batch_size=BATCHSIZE, shuffle=False)
     model = CARMN()
     
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.001)
-    #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
-    print(device)
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.0001)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    best_epoch = 0
+    best_test = 0 
+    valiate = 0
+    test = 0
+    #device = "cpu"
     for e in range(epoch):
+        epoch_start = time.time()
         f = open("./result.txt", "a")
         f.write("epoch: " + str(e+1) + "\n")
         f.close()
         model.train()
+        train_loss = 0
         for i, (text,img,label) in enumerate(train_loader):
-            epoch_start = time.time()
             model = model.to(device)
             text = text.to(device)
             img = img.to(device)
@@ -266,15 +267,24 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            train_loss = train_loss + loss.item()
+            #epoch_end = time.time()
+            
             #if i%20==0:
             #f.write('epoch: {}, batch: {}, loss: {}'.format(e + 1, i + 1, loss.data))
             #print('epoch: {}, batch: {}, loss: {}'.format(e + 1, i + 1, loss.data))
+        train_loss = train_loss/len(train_loader)
+        f = open("./result.txt", "a")
+        f.write("train loss: " + str(train_loss) + "\n")
+        f.close()
         torch.save(model, './trained_model/'+str(e+1)+'.pth')
         
         model.eval()    # turn the model to test pattern, do some as dropout, batchNormalization
         
         correct = 0
         total = 0
+        valiate_loss = 0
+        #epoch_start = time.time()
         for (text,img,label) in valiate_loader:
             model = model.to(device)
             text = text.to(device)
@@ -282,11 +292,16 @@ if __name__ == '__main__':
             label = label.to(device)
             out = model(text, img)
             _, pre = torch.max(out.data, 1)
+            loss = criterion(out, label)
+            valiate_loss = valiate_loss + loss.item()
             #_, pred = torch.max(out, 1)     # 返回每一行中最大值和对应的索引
             total += label.size(0)
             correct += (pre == label).sum().item()
+        #epoch_end = time.time()
+        valiate_loss = valiate_loss/len(valiate_loader)
+        valiate = correct/total
         f = open("./result.txt", "a")
-        f.write('Valiate Accuracy: '+ str(correct / total) + "\n")
+        f.write('Valiate Accuracy: '+ str(valiate) + "\tvaliate loss: " + str(valiate_loss) +"\n")
         f.close()
         #print('Test Accuracy: {}'.format(correct / total))
 
@@ -294,6 +309,8 @@ if __name__ == '__main__':
         
         correct = 0
         total = 0
+        test_loss = 0
+        #epoch_start = time.time()
         for (text,img,label) in test_loader:
             model = model.to(device)
             text = text.to(device)
@@ -301,12 +318,19 @@ if __name__ == '__main__':
             label = label.to(device)
             out = model(text, img)
             _, pre = torch.max(out.data, 1)
+            loss = criterion(out, label)
+            test_loss = test_loss + loss.item()
             #_, pred = torch.max(out, 1)     # 返回每一行中最大值和对应的索引
             total += label.size(0)
             correct += (pre == label).sum().item()
+        test_loss = test_loss/len(test_loader)
+        test = correct/total
+        if (valiate*842+test*1462)>(best_test*2304):
+            best_epoch = e+1
+            best_test = (valiate*842+test*1462)/2304
         epoch_end = time.time()
         f = open("./result.txt", "a")
-        f.write('Test Accuracy: '+ str(correct / total) + "\t" + "time:" + str(epoch_end-epoch_start) + "\n")
+        f.write('Test Accuracy: '+ str(test) + "\ttest loss: " + str(test_loss) + "\ttime: " + str(epoch_end-epoch_start) + "\n" + "best epoch: " + str(best_epoch) + "\tbest test: " + str(best_test) + "\n\n")
         #print('Test Accuracy: {}'.format(correct / total), "time:", epoch_end-epoch_start)
         f.close()
 
